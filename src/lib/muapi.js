@@ -1,9 +1,10 @@
 import { getModelById, getVideoModelById, getI2IModelById, getI2VModelById, getV2VModelById, getLipSyncModelById } from './models.js';
+import { pollForGenerationResult } from '../../packages/studio/src/utils/generationLifecycle.js';
 
 export class MuapiClient {
     constructor() {
         // Ideally user provides this in settings
-        this.baseUrl = import.meta.env.DEV ? '' : 'https://api.muapi.ai';
+        this.baseUrl = (typeof import.meta !== 'undefined' && import.meta.env?.DEV) ? '' : 'https://api.muapi.ai';
     }
 
     getKey() {
@@ -121,51 +122,13 @@ export class MuapiClient {
      * @param {number} interval - Polling interval in ms (default 2000)
      */
     async pollForResult(requestId, key, maxAttempts = 60, interval = 2000) {
-        const pollUrl = `${this.baseUrl}/api/v1/predictions/${requestId}/result`;
-
-        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-            await new Promise(resolve => setTimeout(resolve, interval));
-
-            console.log(`[Muapi] Polling attempt ${attempt}/${maxAttempts}...`);
-
-            try {
-                const response = await fetch(pollUrl, {
-                    method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-api-key': key
-                    }
-                });
-
-                if (!response.ok) {
-                    const errText = await response.text();
-                    console.warn(`[Muapi] Poll error (${response.status}):`, errText);
-                    // Continue polling on non-fatal errors
-                    if (response.status >= 500) continue;
-                    throw new Error(`Poll Failed: ${response.status} - ${errText.slice(0, 100)}`);
-                }
-
-                const data = await response.json();
-                console.log('[Muapi] Poll Response:', data);
-
-                const status = data.status?.toLowerCase();
-
-                if (status === 'completed' || status === 'succeeded' || status === 'success') {
-                    return data;
-                }
-
-                if (status === 'failed' || status === 'error') {
-                    throw new Error(`Generation failed: ${data.error || 'Unknown error'}`);
-                }
-
-                // Otherwise (processing, pending, etc.) keep polling
-            } catch (error) {
-                if (attempt === maxAttempts) throw error;
-                console.warn('[Muapi] Poll attempt failed, retrying...', error.message);
-            }
-        }
-
-        throw new Error('Generation timed out after polling.');
+        return pollForGenerationResult({
+            baseUrl: this.baseUrl,
+            requestId,
+            apiKey: key,
+            maxAttempts,
+            interval,
+        });
     }
 
     async generateVideo(params) {
@@ -318,11 +281,31 @@ export class MuapiClient {
 
         // Place image in the correct field for this model
         const imageField = modelInfo?.imageField || 'image_url';
-        if (params.image_url) {
+        if (params.images_list && params.images_list.length > 0) {
+            if (imageField === 'images_list') {
+                finalPayload.images_list = params.images_list;
+            } else {
+                finalPayload[imageField] = params.images_list[0];
+            }
+        } else if (params.image_url) {
             if (imageField === 'images_list') {
                 finalPayload.images_list = [params.image_url];
             } else {
                 finalPayload[imageField] = params.image_url;
+            }
+        }
+
+        // Optional end-frame image — only for models declaring lastImageField.
+        // Server-side param name varies (last_image vs end_image_url).
+        const lastImageField = modelInfo?.lastImageField;
+        if (lastImageField && params.last_image) {
+            if (lastImageField === 'images_list') {
+                if (!finalPayload.images_list) finalPayload.images_list = [];
+                if (finalPayload.images_list.indexOf(params.last_image) === -1) {
+                    finalPayload.images_list.push(params.last_image);
+                }
+            } else {
+                finalPayload[lastImageField] = params.last_image;
             }
         }
 
@@ -400,10 +383,14 @@ export class MuapiClient {
     }
 
     /**
-     * Processes a video through a Video-to-Video model (e.g. watermark remover).
+     * Processes a video through a Video-to-Video model.
+     * Single-input tools (e.g. watermark remover) only need `video_url`.
+     * Motion-control models additionally need `image_url` and (often) `prompt`.
      * @param {Object} params
      * @param {string} params.model - v2vModel id
      * @param {string} params.video_url - The uploaded video URL
+     * @param {string} [params.image_url] - Reference image URL (motion-control models)
+     * @param {string} [params.prompt] - Motion description (motion-control models)
      */
     async processV2V(params) {
         const key = this.getKey();
@@ -413,6 +400,13 @@ export class MuapiClient {
 
         const videoField = modelInfo?.videoField || 'video_url';
         const finalPayload = { [videoField]: params.video_url };
+
+        if (modelInfo?.imageField && params.image_url) {
+            finalPayload[modelInfo.imageField] = params.image_url;
+        }
+        if (modelInfo?.hasPrompt && params.prompt) {
+            finalPayload.prompt = params.prompt;
+        }
 
         console.log('[Muapi] V2V Request:', url);
         console.log('[Muapi] V2V Payload:', finalPayload);

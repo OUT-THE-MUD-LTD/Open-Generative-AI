@@ -1,7 +1,13 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import toast, { Toaster } from "react-hot-toast";
 import { processLipSync, uploadFile } from "../muapi.js";
+import { formatErrorMessage } from "../utils/formatError.js";
+import { scopedPersistKey, migrateLegacyPersistKey } from "../persistKey.js";
+import MobileGenerationActions, {
+  GenerationCopyButtons,
+} from "./MobileGenerationActions.jsx";
 import {
   lipsyncModels,
   imageLipSyncModels,
@@ -9,6 +15,27 @@ import {
   getLipSyncModelById,
   getResolutionsForLipSyncModel,
 } from "../models.js";
+import {
+  PROMPT_CONTROL_LABEL_CLASS,
+  PromptAction,
+  PromptChevronIcon,
+  PromptComposer,
+  PromptControls,
+  PromptFooter,
+  PromptMenuItem,
+  PromptMenuList,
+  PromptPopover,
+  PromptPopoverHeader,
+  PromptQualityIcon,
+  PromptSegmentedControl,
+  PromptSegmentOption,
+  PromptTextarea,
+  promptControlClassName,
+  promptMediaButtonClassName,
+} from "./prompt/PromptComposer.jsx";
+import en from "../messages/en/lipSyncStudio.json";
+import zh from "../messages/zh/lipSyncStudio.json";
+import { resolveCopy } from "../i18nUtils";
 
 // ---------------------------------------------------------------------------
 // Upload button states
@@ -17,6 +44,27 @@ const UPLOAD_STATE = {
   IDLE: "idle",
   UPLOADING: "uploading",
   READY: "ready",
+};
+
+const isAudioFile = (file) => {
+  if (!file) return false;
+  if (file.type && file.type.startsWith("audio/")) return true;
+  const ext = file.name?.split(".").pop()?.toLowerCase();
+  return ["mp3", "wav", "ogg", "m4a", "aac", "flac", "wma"].includes(ext);
+};
+
+const isImageFile = (file) => {
+  if (!file) return false;
+  if (file.type && file.type.startsWith("image/")) return true;
+  const ext = file.name?.split(".").pop()?.toLowerCase();
+  return ["jpg", "jpeg", "png", "webp", "avif", "gif", "bmp"].includes(ext);
+};
+
+const isVideoFile = (file) => {
+  if (!file) return false;
+  if (file.type && file.type.startsWith("video/")) return true;
+  const ext = file.name?.split(".").pop()?.toLowerCase();
+  return ["mp4", "mov", "webm", "mkv", "avi"].includes(ext);
 };
 
 function MediaPickerButton({
@@ -30,13 +78,44 @@ function MediaPickerButton({
   fileName,
   previewUrl,
   isVideo,
+  isAudio,
   apiKey,
+  mediaCopy = en.media,
 }) {
   const inputRef = useRef(null);
+  const audioRef = useRef(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const dragCounterRef = useRef(0);
+  const acceptPrefix = accept?.split("/")[0];
+
+  useEffect(() => {
+    if (uploadState !== UPLOAD_STATE.READY) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
+      setIsPlaying(false);
+    }
+  }, [uploadState, previewUrl]);
+
+  const togglePlayAudio = (e) => {
+    e.stopPropagation();
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+    } else {
+      audioRef.current.play().catch(console.warn);
+    }
+  };
 
   const handleClick = (e) => {
     e.stopPropagation();
     if (uploadState === UPLOAD_STATE.READY) {
+      if (isAudio) {
+        togglePlayAudio(e);
+        return;
+      }
       onClear();
       return;
     }
@@ -44,137 +123,229 @@ function MediaPickerButton({
   };
 
   const handleChange = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const fileList = Array.from(files);
     e.target.value = "";
-    await onUpload(file);
+    await onUpload(fileList);
   };
 
-  const borderClass =
-    uploadState === UPLOAD_STATE.READY
-      ? "border-primary/60 bg-primary/5"
-      : "border-white/[0.03] bg-white/[0.03] hover:bg-white/[0.06] hover:border-primary/40";
+  const handleDragEnter = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current += 1;
+    if (e.dataTransfer?.items && e.dataTransfer.items.length > 0) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDragging(false);
+    }
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const isAcceptedFile = (file) => {
+    if (!file) return false;
+    if (acceptPrefix === "audio") return isAudioFile(file);
+    if (acceptPrefix === "image") return isImageFile(file);
+    if (acceptPrefix === "video") return isVideoFile(file);
+    return true;
+  };
+
+  const handleDrop = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+    if (uploadState === UPLOAD_STATE.UPLOADING) return;
+    const files = Array.from(e.dataTransfer?.files || []).filter(isAcceptedFile);
+    if (files.length === 0) return;
+    await onUpload(files);
+  };
 
   return (
-    <button
-      type="button"
-      title={
-        uploadState === UPLOAD_STATE.READY
-          ? `${fileName} — click to clear`
-          : `Upload ${label.toLowerCase()} file`
-      }
-      onClick={handleClick}
-      className={`flex-shrink-0 w-10 h-10 rounded-full border transition-all flex items-center justify-center relative overflow-hidden group ${borderClass}`}
-    >
+    <div className="relative inline-flex group/media">
       <input
         ref={inputRef}
         type="file"
         accept={accept}
         className="hidden"
+        onClick={(e) => e.stopPropagation()}
         onChange={handleChange}
       />
+      <button
+        type="button"
+        title={
+          uploadState === UPLOAD_STATE.READY
+            ? isAudio
+              ? `${fileName} — ${isPlaying ? "Pause" : "Play"}`
+              : `${fileName} — ${mediaCopy.clickToClear}`
+            : `${mediaCopy.uploadFilePrefix} ${label} ${mediaCopy.uploadFileSuffix}`
+        }
+        onClick={handleClick}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        className={promptMediaButtonClassName({
+          active: uploadState === UPLOAD_STATE.READY,
+          className: isDragging
+            ? "ring-2 ring-[#22d3ee] ring-offset-1 ring-offset-black scale-105"
+            : "",
+        })}
+      >
+        {/* Idle state */}
+        {uploadState === UPLOAD_STATE.IDLE && (
+          <div className="flex flex-col items-center justify-center gap-1 w-full h-full">
+            {icon}
+          </div>
+        )}
 
-      {/* Idle state */}
-      {uploadState === UPLOAD_STATE.IDLE && (
-        <div className="flex flex-col items-center justify-center gap-1 w-full h-full">
-          {icon}
-        </div>
-      )}
-
-      {/* Uploading indicator */}
-      {uploadState === UPLOAD_STATE.UPLOADING && (
-        <div className="flex flex-col items-center justify-center w-full h-full absolute inset-0 bg-black/80 z-20 backdrop-blur-[2px]">
-          <svg className="w-8 h-8 -rotate-90">
-            <circle
-              cx="16"
-              cy="16"
-              r="14"
-              stroke="currentColor"
-              strokeWidth="2"
-              fill="transparent"
-              className="text-white/10"
-            />
-            <circle
-              cx="16"
-              cy="16"
-              r="14"
-              stroke="currentColor"
-              strokeWidth="2"
-              fill="transparent"
-              strokeDasharray={88}
-              strokeDashoffset={88 - (88 * progress) / 100}
-              className="text-primary transition-all duration-300"
-            />
-          </svg>
-          <span className="absolute text-[9px] font-black text-primary leading-none">
-            {progress}%
-          </span>
-        </div>
-      )}
-
-      {/* Ready state */}
-      {uploadState === UPLOAD_STATE.READY && (
-        <div className="flex flex-col items-center justify-center gap-1 w-full h-full absolute inset-0 bg-primary/10 rounded-full group-hover:bg-primary/20 transition-all">
-          {previewUrl ? (
-            isVideo ? (
-              <video
-                src={previewUrl}
-                className="w-full h-full object-cover"
-                muted
+        {/* Uploading indicator */}
+        {uploadState === UPLOAD_STATE.UPLOADING && (
+          <div className="flex flex-col items-center justify-center w-full h-full absolute inset-0 bg-black/80 z-20 backdrop-blur-[2px]">
+            <svg className="w-8 h-8 -rotate-90">
+              <circle
+                cx="16"
+                cy="16"
+                r="14"
+                stroke="currentColor"
+                strokeWidth="2"
+                fill="transparent"
+                className="text-white/10"
               />
+              <circle
+                cx="16"
+                cy="16"
+                r="14"
+                stroke="currentColor"
+                strokeWidth="2"
+                fill="transparent"
+                strokeDasharray={88}
+                strokeDashoffset={88 - (88 * progress) / 100}
+                className="text-primary transition-all duration-300"
+              />
+            </svg>
+            <span className="absolute text-[9px] font-black text-primary leading-none">
+              {progress}%
+            </span>
+          </div>
+        )}
+
+        {/* Ready state */}
+        {uploadState === UPLOAD_STATE.READY && (
+          <div className="flex flex-col items-center justify-center gap-1 w-full h-full absolute inset-0 bg-primary/10 rounded-full group-hover:bg-primary/20 transition-all">
+            {isAudio ? (
+              <div className="flex flex-col items-center justify-center w-full h-full text-primary">
+                {previewUrl && (
+                  <audio
+                    ref={audioRef}
+                    src={previewUrl}
+                    onEnded={() => setIsPlaying(false)}
+                    onPause={() => setIsPlaying(false)}
+                    onPlay={() => setIsPlaying(true)}
+                  />
+                )}
+                {isPlaying ? (
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    className="text-primary animate-pulse"
+                  >
+                    <rect x="6" y="4" width="4" height="16" rx="1" />
+                    <rect x="14" y="4" width="4" height="16" rx="1" />
+                  </svg>
+                ) : (
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    className="text-primary translate-x-0.5"
+                  >
+                    <polygon points="5 3 19 12 5 21 5 3" />
+                  </svg>
+                )}
+              </div>
+            ) : previewUrl ? (
+              isVideo ? (
+                <video
+                  src={previewUrl}
+                  className="w-full h-full object-cover"
+                  muted
+                />
+              ) : (
+                <img
+                  src={previewUrl}
+                  alt=""
+                  className="w-full h-full object-cover"
+                />
+              )
             ) : (
-              <img
-                src={previewUrl}
-                alt=""
-                className="w-full h-full object-cover"
-              />
-            )
-          ) : (
-            <div className="flex flex-col items-center justify-center w-full px-1">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-primary mb-0.5">
-                <path d="M9 18V5l12-2v13" />
-                <circle cx="6" cy="18" r="3" />
-                <circle cx="18" cy="16" r="3" />
-              </svg>
-              <span className="text-[7px] font-black text-primary uppercase truncate w-full text-center">
-                {fileName?.split('.').pop() || "AUD"}
-              </span>
-            </div>
-          )}
-        </div>
+              <div className="flex flex-col items-center justify-center w-full px-1">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-primary mb-0.5">
+                  <path d="M9 18V5l12-2v13" />
+                  <circle cx="6" cy="18" r="3" />
+                  <circle cx="18" cy="16" r="3" />
+                </svg>
+                <span className="text-[7px] font-black text-primary uppercase truncate w-full text-center">
+                  {fileName?.split('.').pop() || "AUD"}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </button>
+
+      {/* Clear badge button on top corner for uploaded media */}
+      {uploadState === UPLOAD_STATE.READY && (
+        <button
+          type="button"
+          title={mediaCopy.clickToClear || "Clear"}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (audioRef.current) {
+              audioRef.current.pause();
+              audioRef.current.currentTime = 0;
+            }
+            setIsPlaying(false);
+            onClear();
+          }}
+          className="absolute -top-1 -right-1 w-4 h-4 bg-black/80 hover:bg-red-500 rounded-full flex items-center justify-center text-white text-[10px] border border-white/20 transition-all z-20 shadow-md group-hover/media:opacity-100 opacity-80 sm:opacity-0 sm:group-hover/media:opacity-100"
+        >
+          ×
+        </button>
       )}
-    </button>
+    </div>
   );
 }
 
 // ---------------------------------------------------------------------------
 // Inline dropdown
 // ---------------------------------------------------------------------------
-function Dropdown({ isOpen, items, selectedId, onSelect, onClose, anchorRef }) {
+function Dropdown({
+  isOpen,
+  title,
+  items,
+  selectedId,
+  onSelect,
+  onClose,
+  anchorRef,
+  className = "",
+}) {
   const dropRef = useRef(null);
-  const [style, setStyle] = useState({});
-
-  useEffect(() => {
-    if (!isOpen || !anchorRef?.current || !dropRef.current) return;
-
-    const rect = anchorRef.current.getBoundingClientRect();
-    const ddHeight = dropRef.current.offsetHeight;
-    const spaceBelow = window.innerHeight - rect.bottom - 8;
-    const spaceAbove = rect.top - 8;
-
-    let top, bottom, maxHeight;
-    if (spaceBelow >= ddHeight || spaceBelow >= spaceAbove) {
-      top = rect.bottom + 8;
-      bottom = "auto";
-      maxHeight = Math.max(150, spaceBelow - 8);
-    } else {
-      top = "auto";
-      bottom = window.innerHeight - rect.top + 8;
-      maxHeight = Math.max(150, spaceAbove - 8);
-    }
-    const left = Math.min(rect.left, window.innerWidth - 220);
-    setStyle({ top, bottom, left, maxHeight });
-  }, [isOpen, anchorRef]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -193,39 +364,34 @@ function Dropdown({ isOpen, items, selectedId, onSelect, onClose, anchorRef }) {
   if (!isOpen) return null;
 
   return (
-    <div
+    <PromptPopover
       ref={dropRef}
-      style={{
-        position: "fixed",
-        zIndex: 100,
-        overflowY: "auto",
-        ...style,
-      }}
-      className="bg-[#111] border border-white/10 rounded-lg shadow-3xl p-2 custom-scrollbar w-[calc(100vw-3rem)] max-w-xs"
+      className={className}
+      onClick={(e) => e.stopPropagation()}
     >
+      <PromptPopoverHeader>{title}</PromptPopoverHeader>
+      <PromptMenuList>
       {items.map((item) => (
-        <button
+        <PromptMenuItem
           key={item.id}
-          type="button"
+          selected={item.id === selectedId}
+          description={
+            item.description
+              ? `${item.description.slice(0, 60)}${
+                  item.description.length > 60 ? "..." : ""
+                }`
+              : undefined
+          }
           onClick={() => {
             onSelect(item);
             onClose();
           }}
-          className={`w-full text-left px-4 py-2 rounded text-sm transition-all hover:bg-white/10 ${
-            item.id === selectedId
-              ? "text-primary font-bold bg-primary/5"
-              : "text-white font-medium"
-          }`}
         >
-          <div>{item.name}</div>
-          {item.description && (
-            <div className="text-xs text-muted mt-0.5">
-              {item.description.slice(0, 60)}...
-            </div>
-          )}
-        </button>
+          {item.name}
+        </PromptMenuItem>
       ))}
-    </div>
+      </PromptMenuList>
+    </PromptPopover>
   );
 }
 
@@ -317,12 +483,21 @@ const VideoIcon = ({
 // ---------------------------------------------------------------------------
 export default function LipSyncStudio({
   apiKey,
+  onGenerationStart,
+  onGenerationEnd,
   onGenerationComplete,
+  onGenerationError,
   historyItems,
   droppedFiles,
   onFilesHandled,
+  locale = "en",
 }) {
-  const PERSIST_KEY = "hg_lipsync_studio_persistent";
+  const copy = resolveCopy(en, zh, locale);
+  const LEGACY_PERSIST_KEY = "hg_lipsync_studio_persistent";
+  const PERSIST_KEY = scopedPersistKey(LEGACY_PERSIST_KEY, apiKey);
+  useEffect(() => {
+    migrateLegacyPersistKey(LEGACY_PERSIST_KEY, PERSIST_KEY);
+  }, [PERSIST_KEY]);
 
   // ── Mode & model state ──────────────────────────────────────────────────
   const [inputMode, setInputMode] = useState("image"); // 'image' | 'video'
@@ -374,6 +549,7 @@ export default function LipSyncStudio({
   const [openDropdown, setOpenDropdown] = useState(null); // 'model' | 'resolution' | null
   const modelBtnRef = useRef(null);
   const resolutionBtnRef = useRef(null);
+  const textareaRef = useRef(null);
 
   // ── Video ref for result ────────────────────────────────────────────────
   const resultVideoRef = useRef(null);
@@ -381,6 +557,7 @@ export default function LipSyncStudio({
 
   // ── Persistence: Load ────────────────────────────────────────────────────
   useEffect(() => {
+    hasRestored.current = false;
     try {
       const stored = localStorage.getItem(PERSIST_KEY);
       if (stored) {
@@ -411,10 +588,11 @@ export default function LipSyncStudio({
     } finally {
       hasRestored.current = true;
     }
-  }, []);
+  }, [PERSIST_KEY]);
 
   // ── Persistence: Save ────────────────────────────────────────────────────
   useEffect(() => {
+    if (!hasRestored.current) return;
     const timer = setTimeout(() => {
       try {
         const state = {
@@ -437,6 +615,7 @@ export default function LipSyncStudio({
     }, 500); // 500ms debounce
     return () => clearTimeout(timer);
   }, [
+    PERSIST_KEY,
     inputMode,
     selectedModelId,
     selectedResolution,
@@ -469,9 +648,11 @@ export default function LipSyncStudio({
 
   // ── Upload handlers ─────────────────────────────────────────────────────
   const handleImageUpload = useCallback(
-    async (file) => {
+    async (files) => {
+      const file = Array.isArray(files) ? files[0] : files;
+      if (!file) return;
       if (file.size > 10 * 1024 * 1024) {
-        alert("Image exceeds 10MB limit.");
+        toast.error(copy.errors.imageTooLarge);
         return;
       }
       setImageState(UPLOAD_STATE.UPLOADING);
@@ -485,18 +666,20 @@ export default function LipSyncStudio({
         setImageState(UPLOAD_STATE.READY);
       } catch (err) {
         setImageState(UPLOAD_STATE.IDLE);
-        alert(`Image upload failed: ${err.message}`);
+        toast.error(copy.errors.imageUploadFailed.replace("{message}", err.message));
       } finally {
         setImageProgress(0);
       }
     },
-    [apiKey],
+    [apiKey, copy],
   );
 
   const handleVideoPick = useCallback(
-    async (file) => {
+    async (files) => {
+      const file = Array.isArray(files) ? files[0] : files;
+      if (!file) return;
       if (file.size > 50 * 1024 * 1024) {
-        alert("Video exceeds 50MB limit.");
+        toast.error(copy.errors.videoTooLarge);
         return;
       }
       setVideoState(UPLOAD_STATE.UPLOADING);
@@ -510,18 +693,24 @@ export default function LipSyncStudio({
         setVideoState(UPLOAD_STATE.READY);
       } catch (err) {
         setVideoState(UPLOAD_STATE.IDLE);
-        alert(`Video upload failed: ${err.message}`);
+        toast.error(copy.errors.videoUploadFailed.replace("{message}", err.message));
       } finally {
         setVideoProgress(0);
       }
     },
-    [apiKey],
+    [apiKey, copy],
   );
 
+  const handlePromptInput = (e) => {
+    setPrompt(e.target.value);
+  };
+
   const handleAudioPick = useCallback(
-    async (file) => {
+    async (files) => {
+      const file = Array.isArray(files) ? files[0] : files;
+      if (!file) return;
       if (file.size > 10 * 1024 * 1024) {
-        alert("Audio file exceeds 10MB limit.");
+        toast.error(copy.errors.audioTooLarge);
         return;
       }
       setAudioState(UPLOAD_STATE.UPLOADING);
@@ -535,24 +724,25 @@ export default function LipSyncStudio({
         setAudioState(UPLOAD_STATE.READY);
       } catch (err) {
         setAudioState(UPLOAD_STATE.IDLE);
-        alert(`Audio upload failed: ${err.message}`);
+        toast.error(copy.errors.audioUploadFailed.replace("{message}", err.message));
       } finally {
         setAudioProgress(0);
       }
     },
-    [apiKey],
+    [apiKey, copy],
   );
 
   // ── Handle Dropped Files ────────────────────────────────────────────────
   useEffect(() => {
     if (droppedFiles && droppedFiles.length > 0) {
-      const imageFiles = droppedFiles.filter(f => f.type.startsWith('image/'));
-      const videoFiles = droppedFiles.filter(f => f.type.startsWith('video/'));
-      const audioFiles = droppedFiles.filter(f => f.type.startsWith('audio/'));
+      const audioFiles = droppedFiles.filter(isAudioFile);
+      const videoFiles = droppedFiles.filter(isVideoFile);
+      const imageFiles = droppedFiles.filter(isImageFile);
       
       if (audioFiles.length > 0) {
         handleAudioPick(audioFiles[0]);
-      } else if (videoFiles.length > 0) {
+      }
+      if (videoFiles.length > 0) {
         switchToVideo();
         handleVideoPick(videoFiles[0]);
       } else if (imageFiles.length > 0) {
@@ -570,6 +760,11 @@ export default function LipSyncStudio({
     setVideoUrl(null);
     setVideoState(UPLOAD_STATE.IDLE);
     setVideoName("");
+    const first = imageLipSyncModels[0];
+    if (first) {
+      setSelectedModelId(first.id);
+      setSelectedResolution(first.inputs?.resolution?.default ?? "480p");
+    }
   };
 
   const switchToVideo = () => {
@@ -578,6 +773,11 @@ export default function LipSyncStudio({
     setImageUrl(null);
     setImageState(UPLOAD_STATE.IDLE);
     setImageName("");
+    const first = videoLipSyncModels[0];
+    if (first) {
+      setSelectedModelId(first.id);
+      setSelectedResolution(first.inputs?.resolution?.default ?? "480p");
+    }
   };
 
   // ── Model selection ─────────────────────────────────────────────────────
@@ -616,18 +816,19 @@ export default function LipSyncStudio({
   // ── Generation ──────────────────────────────────────────────────────────
   const handleGenerate = async () => {
     if (!audioUrl) {
-      alert("Please upload an audio file first.");
+      toast.error(copy.errors.needAudio);
       return;
     }
     if (inputMode === "image" && !imageUrl) {
-      alert("Please upload a portrait image first.");
+      toast.error(copy.errors.needImage);
       return;
     }
     if (inputMode === "video" && !videoUrl) {
-      alert("Please upload a source video first.");
+      toast.error(copy.errors.needVideo);
       return;
     }
 
+    onGenerationStart?.();
     setIsGenerating(true);
     setGenerateError(null);
 
@@ -671,10 +872,12 @@ export default function LipSyncStudio({
       }
     } catch (e) {
       console.error("[LipSyncStudio]", e);
-      setGenerateError(e.message?.slice(0, 80) ?? "Unknown error");
-      setTimeout(() => setGenerateError(null), 4000);
+      const errMsg = formatErrorMessage(e, copy.errors.generationFailed);
+      if (onGenerationError) onGenerationError(errMsg);
+      else toast.error(errMsg);
     } finally {
       setIsGenerating(false);
+      onGenerationEnd?.();
     }
   };
 
@@ -699,17 +902,17 @@ export default function LipSyncStudio({
     inputMode === "image"
       ? imageState === UPLOAD_STATE.READY
         ? `✓ ${imageName}`
-        : "No image"
+        : copy.media.noImage
       : videoState === UPLOAD_STATE.READY
         ? `✓ ${videoName}`
-        : "No video";
+        : copy.media.noVideo;
   const mediaStatusClass =
     (inputMode === "image" ? imageState : videoState) === UPLOAD_STATE.READY
       ? "text-primary"
       : "text-muted";
 
   const audioStatusText =
-    audioState === UPLOAD_STATE.READY ? `✓ ${audioName}` : "No audio";
+    audioState === UPLOAD_STATE.READY ? `✓ ${audioName}` : copy.media.noAudio;
   const audioStatusClass =
     audioState === UPLOAD_STATE.READY ? "text-primary" : "text-muted";
 
@@ -733,12 +936,12 @@ export default function LipSyncStudio({
             {history.map((entry, idx) => (
               <div
                 key={entry.id || idx}
-                className="relative group rounded-2xl overflow-hidden border border-white/10 bg-[#0a0a0a] shadow-xl hover:border-primary/50 transition-all duration-300 flex flex-col"
+                className="relative group rounded-2xl overflow-hidden border border-white/10 bg-[#0a0a0a] shadow-xl hover:border-primary/50 transition-all duration-300 flex flex-col cursor-pointer"
+                onClick={() => setFullscreenUrl(entry.url)}
               >
                 <video
                   src={entry.url}
-                  className="w-full aspect-video object-cover bg-black/40 cursor-pointer hover:opacity-80 transition-opacity"
-                  onClick={() => setFullscreenUrl(entry.url)}
+                  className="w-full aspect-video object-cover bg-black/40 hover:opacity-80 transition-opacity"
                   controls={false}
                   loop
                   muted
@@ -751,26 +954,14 @@ export default function LipSyncStudio({
                 />
                 
                 {/* Overlay actions */}
-                <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="absolute top-2 right-2 hidden md:flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <GenerationCopyButtons
+                    prompt={entry.prompt}
+                    onCopyError={onGenerationError}
+                  />
                   <button
                     type="button"
-                    title="Fullscreen"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setFullscreenUrl(entry.url);
-                    }}
-                    className="p-2 bg-black/60 backdrop-blur-md rounded-full text-white hover:bg-primary hover:text-black transition-all border border-white/10"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <polyline points="15 3 21 3 21 9" />
-                      <polyline points="9 21 3 21 3 15" />
-                      <line x1="21" y1="3" x2="14" y2="10" />
-                      <line x1="3" y1="21" x2="10" y2="14" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    title="Download"
+                    title={copy.actions.download}
                     onClick={(e) => {
                       e.stopPropagation();
                       downloadFile(entry.url, `lipsync-${entry.id || idx}.mp4`);
@@ -781,17 +972,64 @@ export default function LipSyncStudio({
                       <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
                     </svg>
                   </button>
+                  <button
+                    type="button"
+                    title={copy.actions.delete}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm(copy.confirm.deleteItem)) {
+                        setInternalHistory(prev => prev.filter((_, i) => i !== idx));
+                      }
+                    }}
+                    className="p-2 bg-black/60 backdrop-blur-md rounded-full text-red-400 hover:bg-red-500 hover:text-white transition-all border border-white/10"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                      <line x1="10" y1="11" x2="10" y2="17" />
+                      <line x1="14" y1="11" x2="14" y2="17" />
+                    </svg>
+                  </button>
                 </div>
+                <MobileGenerationActions
+                  prompt={entry.prompt}
+                  onCopyError={onGenerationError}
+                  actions={[
+                    {
+                      kind: "download",
+                      label: copy.actions.download,
+                      onSelect: () =>
+                        downloadFile(entry.url, `lipsync-${entry.id || idx}.mp4`),
+                    },
+                    {
+                      kind: "delete",
+                      label: copy.actions.delete,
+                      danger: true,
+                      onSelect: () => {
+                        if (confirm(copy.confirm.deleteItem)) {
+                          setInternalHistory((prev) => prev.filter((_, i) => i !== idx));
+                        }
+                      },
+                    },
+                  ]}
+                />
 
                 {/* Details */}
                 <div className="p-3 bg-black/80 backdrop-blur-sm border-t border-white/5 flex-1 flex flex-col justify-between gap-2">
-                  <div className="flex items-center justify-between flex-wrap gap-1">
-                    <span className="text-[10px] font-bold text-primary px-2 py-0.5 bg-primary/10 rounded border border-primary/20 whitespace-nowrap">
-                      {entry.model?.name || entry.model || "Lip Sync"}
-                    </span>
-                    {entry.resolution && (
-                      <span className="text-[10px] text-white/40">{entry.resolution}</span>
-                    )}
+                  {entry.prompt && (
+                    <p className="text-white/70 text-xs line-clamp-2 leading-relaxed" title={entry.prompt}>
+                      {entry.prompt}
+                    </p>
+                  )}
+                  <div className="flex items-center justify-between flex-wrap gap-1 mt-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold text-primary px-2 py-0.5 bg-primary/10 rounded border border-primary/20 whitespace-nowrap">
+                        {copy.badges.lipSync}
+                      </span>
+                      {entry.resolution && (
+                        <span className="text-[10px] text-white/40">{entry.resolution}</span>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -799,58 +1037,80 @@ export default function LipSyncStudio({
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center h-full animate-fade-in-up transition-all duration-700 min-h-[50vh]">
-            <div className="mb-12 relative group">
-              <div className="absolute inset-0 bg-primary/10 blur-[120px] rounded-full opacity-30 group-hover:opacity-60 transition-opacity duration-1000" />
-              <div className="relative w-24 h-24 md:w-32 md:h-32 bg-white/[0.02] rounded-[2rem] flex items-center justify-center border border-white/[0.05] overflow-hidden backdrop-blur-sm">
-                <div className="w-16 h-16 bg-primary/5 rounded-2xl flex items-center justify-center border border-primary/10 relative z-10 transition-transform duration-500 group-hover:scale-110">
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary opacity-80">
-                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                    <line x1="12" y1="19" x2="12" y2="23" />
-                    <line x1="8" y1="23" x2="16" y2="23" />
-                  </svg>
-                </div>
-                <div className="absolute top-4 right-4 text-[10px] text-primary/40 animate-pulse">🎙</div>
+            {/* Overlapping floating cards */}
+            <div className="flex items-center justify-center gap-1.5 md:gap-3 mb-10 select-none scale-90 sm:scale-100">
+              <div className="w-18 h-22 sm:w-24 sm:h-28 rounded-2xl border border-white/10 shadow-2xl -rotate-[12deg] transform hover:rotate-0 hover:scale-110 hover:z-20 transition-all duration-300 overflow-hidden bg-white/[0.01] flex-shrink-0">
+                <img
+                  src="https://d3adwkbyhxyrtq.cloudfront.net/webassets/videomodels/sdxl-image.avif"
+                  alt="Creative asset 1"
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <div className="w-18 h-22 sm:w-24 sm:h-28 rounded-2xl border border-white/10 shadow-2xl -rotate-[4deg] transform hover:rotate-0 hover:scale-110 hover:z-20 transition-all duration-300 overflow-hidden bg-white/[0.01] -ml-3 sm:-ml-4 flex-shrink-0">
+                <img
+                  src="https://d3adwkbyhxyrtq.cloudfront.net/webassets/videomodels/chroma-image.avif"
+                  alt="Creative asset 2"
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <div className="w-18 h-18 sm:w-24 sm:h-24 rounded-full border border-white/10 shadow-2xl rotate-[6deg] transform hover:rotate-0 hover:scale-110 hover:z-20 transition-all duration-300 overflow-hidden bg-white/[0.01] -ml-3 sm:-ml-4 flex-shrink-0">
+                <img
+                  src="https://d3adwkbyhxyrtq.cloudfront.net/webassets/videomodels/neta-lumina.avif"
+                  alt="Creative asset 3"
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <div className="w-18 h-22 sm:w-24 sm:h-28 rounded-2xl border border-white/10 shadow-2xl rotate-[12deg] transform hover:rotate-0 hover:scale-110 hover:z-20 transition-all duration-300 overflow-hidden bg-white/[0.01] -ml-3 sm:-ml-4 flex-shrink-0">
+                <img
+                  src="https://d3adwkbyhxyrtq.cloudfront.net/webassets/videomodels/perfect-pony-xl.avif"
+                  alt="Creative asset 4"
+                  className="w-full h-full object-cover"
+                />
               </div>
             </div>
-            <h1 className="text-3xl sm:text-5xl md:text-6xl font-extrabold text-white tracking-tight mb-4 text-center px-4">
-              <span className="text-white/40 font-medium">START CREATING WITH</span><br />
-              <span className="text-white">LIP SYNC</span>
+
+            <h1 className="text-2xl sm:text-4xl md:text-5xl font-extrabold tracking-tight mb-4 text-center px-4 flex flex-col items-center">
+              <span className="text-white font-black uppercase text-xl sm:text-3xl tracking-wide mb-1 opacity-90">{copy.hero.titleLine1}</span>
+              <span className="text-[#22d3ee] font-black uppercase text-2xl sm:text-4xl sm:mt-1 tracking-tight">
+                {copy.hero.titleLine2}
+              </span>
             </h1>
-            <p className="text-white/40 text-sm md:text-base font-medium tracking-wide text-center max-w-lg leading-relaxed">
-              Animate portraits or sync lips to audio with AI
+            <p className="text-white/40 text-xs sm:text-sm font-medium tracking-wide text-center max-w-lg leading-relaxed px-4">
+              {copy.hero.subtitle}
             </p>
           </div>
         )}
       </div>
 
       {/* ── BOTTOM PROMPT BAR ── */}
-      <div className="absolute bottom-4 w-full max-w-[95%] lg:max-w-4xl z-40 animate-fade-in-up" style={{ animationDelay: "0.2s" }}>
-        <div className="w-full bg-[#0a0a0a]/80 backdrop-blur-3xl rounded-md border border-white/10 p-4 flex flex-col gap-2 shadow-2xl">
+      <PromptComposer>
           {/* Mode toggle row */}
-          <div className="flex items-center gap-2 px-3">
-            <button
+          <div className="flex items-center px-1">
+            <PromptSegmentedControl>
+            <PromptSegmentOption
               type="button"
               onClick={switchToImage}
-              className={`px-3 py-1 rounded-md text-xs font-bold transition-all border ${
-                inputMode === "image"
-                  ? "border-primary/60 bg-primary/5 text-primary"
-                  : "border-white/[0.03] bg-white/[0.03] text-white/40 hover:border-white/20 hover:text-white"
-              }`}
+              selected={inputMode === "image"}
             >
-              🖼 Portrait Image
-            </button>
-            <button
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <path d="m21 15-5-5L5 21" />
+              </svg>
+              {copy.modes.portraitImage}
+            </PromptSegmentOption>
+            <PromptSegmentOption
               type="button"
               onClick={switchToVideo}
-              className={`px-3 py-1 rounded-md text-[10px] font-bold transition-all border ${
-                inputMode === "video"
-                  ? "border-primary/60 bg-primary/5 text-primary"
-                  : "border-white/[0.03] bg-white/[0.03] text-white/40 hover:border-white/20 hover:text-white"
-              }`}
+              selected={inputMode === "video"}
             >
-              🎬 Video
-            </button>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <rect x="2" y="5" width="15" height="14" rx="2" />
+                <path d="m17 10 5-3v10l-5-3" />
+              </svg>
+              {copy.modes.video}
+            </PromptSegmentOption>
+            </PromptSegmentedControl>
           </div>
 
           {/* Uploads row */}
@@ -860,7 +1120,8 @@ export default function LipSyncStudio({
               {inputMode === "image" && (
                 <MediaPickerButton
                   accept="image/*"
-                  label="Image"
+                  label={copy.media.imageLabel}
+                  mediaCopy={copy.media}
                   icon={
                     <svg
                       width="16"
@@ -869,7 +1130,7 @@ export default function LipSyncStudio({
                       fill="none"
                       stroke="currentColor"
                       strokeWidth="2"
-                      className="text-white/40 group-hover:text-primary transition-colors"
+                      className="text-white/40 group-hover:text-[#22d3ee] transition-colors"
                     >
                       <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
                       <circle cx="8.5" cy="8.5" r="1.5" />
@@ -895,9 +1156,10 @@ export default function LipSyncStudio({
               {inputMode === "video" && (
                 <MediaPickerButton
                   accept="video/*"
-                  label="Video"
+                  label={copy.media.videoLabel}
+                  mediaCopy={copy.media}
                   icon={
-                    <VideoIcon className="text-white/40 group-hover:text-primary transition-colors" />
+                    <VideoIcon className="text-white/40 group-hover:text-[#22d3ee] transition-colors" />
                   }
                   onUpload={handleVideoPick}
                   onClear={() => {
@@ -917,9 +1179,10 @@ export default function LipSyncStudio({
               {/* Audio picker — always visible */}
               <MediaPickerButton
                 accept="audio/*"
-                label="Audio"
+                label={copy.media.audioLabel}
+                mediaCopy={copy.media}
                 icon={
-                  <MicIcon className="text-white/40 group-hover:text-primary transition-colors" />
+                  <MicIcon className="text-white/40 group-hover:text-[#22d3ee] transition-colors" />
                 }
                 onUpload={handleAudioPick}
                 onClear={() => {
@@ -930,29 +1193,27 @@ export default function LipSyncStudio({
                 uploadState={audioState}
                 progress={audioProgress}
                 fileName={audioName}
-                previewUrl={null}
+                previewUrl={audioUrl}
+                isAudio={true}
                 isVideo={false}
                 apiKey={apiKey}
               />
             </div>
 
             {/* Prompt textarea */}
-            {showPrompt && (
-              <div className="flex-1 flex flex-col">
-                <textarea
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  placeholder="Describe speech style..."
-                  className="w-full bg-transparent border-none text-white text-sm placeholder:text-white/10 focus:outline-none resize-none pt-1 leading-relaxed min-h-[40px] max-h-[150px] md:max-h-[250px] overflow-y-auto custom-scrollbar disabled:opacity-40"
-                  rows={1}
-                />
-              </div>
-            )}
+            <div className="flex-1 flex flex-col">
+              <PromptTextarea
+                ref={textareaRef}
+                value={prompt}
+                onChange={handlePromptInput}
+                placeholder={copy.prompt.placeholder}
+              />
+            </div>
           </div>
 
           {/* Bottom controls row */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pt-2 border-t border-white/[0.03] relative">
-            <div className="flex items-center gap-2 px-1">
+          <PromptFooter>
+            <PromptControls>
               {/* Model selector */}
               <div className="relative">
                 <button
@@ -964,35 +1225,29 @@ export default function LipSyncStudio({
                       openDropdown === "model" ? null : "model",
                     );
                   }}
-                  className="flex items-center gap-2 px-2 py-1.5 bg-white/[0.03] hover:bg-white/[0.06] rounded-md transition-all border border-white/[0.03] group whitespace-nowrap"
+                  className={promptControlClassName({
+                    active: openDropdown === "model",
+                  })}
                 >
-                  <div className="w-3.5 h-3.5 bg-[#d9ff00] rounded-sm flex items-center justify-center">
+                  <div className="w-3.5 h-3.5 bg-[#22d3ee] rounded-sm flex items-center justify-center">
                     <span className="text-[9px] font-black text-black">
                       S
                     </span>
                   </div>
-                  <span className="text-xs font-semibold text-white/70 group-hover:text-[#d9ff00] transition-colors">
-                    {selectedModel?.name ?? "Select model"}
+                  <span className={PROMPT_CONTROL_LABEL_CLASS}>
+                    {selectedModel?.name ?? copy.model.selectModel}
                   </span>
-                  <svg
-                    width="10"
-                    height="10"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                    className="opacity-50 group-hover:opacity-100 transition-opacity flex-shrink-0"
-                  >
-                    <path d="M6 9l6 6 6-6" />
-                  </svg>
+                  <PromptChevronIcon />
                 </button>
                 <Dropdown
                   isOpen={openDropdown === "model"}
+                  title={copy.model.dropdownTitle}
                   items={modelDropdownItems}
                   selectedId={selectedModelId}
                   onSelect={handleModelSelect}
                   onClose={() => setOpenDropdown(null)}
                   anchorRef={modelBtnRef}
+                  className="w-80 max-w-[calc(100vw-3rem)]"
                 />
               </div>
 
@@ -1008,14 +1263,18 @@ export default function LipSyncStudio({
                         openDropdown === "resolution" ? null : "resolution",
                       );
                     }}
-                    className="flex items-center gap-2 px-2 py-1.5 bg-white/[0.03] hover:bg-white/[0.06] rounded-md transition-all border border-white/[0.03] group whitespace-nowrap"
+                    className={promptControlClassName({
+                      active: openDropdown === "resolution",
+                    })}
                   >
-                    <span className="text-xs font-semibold text-white/70 group-hover:text-[#d9ff00] transition-colors">
+                    <PromptQualityIcon />
+                    <span className={PROMPT_CONTROL_LABEL_CLASS}>
                       {selectedResolution}
                     </span>
                   </button>
                   <Dropdown
                     isOpen={openDropdown === "resolution"}
+                    title={copy.model.resolutionDropdownTitle}
                     items={resolutionDropdownItems}
                     selectedId={selectedResolution}
                     onSelect={(item) => setSelectedResolution(item.id)}
@@ -1024,33 +1283,28 @@ export default function LipSyncStudio({
                   />
                 </div>
               )}
-            </div>
+            </PromptControls>
 
             {/* Generate button */}
-            <button
-              type="button"
+            <PromptAction
               onClick={handleGenerate}
               disabled={isGenerating}
-              className="bg-[#d9ff00] text-black px-4 py-2 rounded-md font-medium text-sm hover:bg-[#e5ff33] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 w-full sm:w-auto shadow-lg shadow-[#d9ff00]/10 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isGenerating ? (
                 <>
                   <span className="animate-spin inline-block text-black">
                     ◌
                   </span>{" "}
-                  Generating...
+                  {copy.actions.generating}
                 </>
-              ) : generateError ? (
-                `Error: ${generateError}`
               ) : (
                 <>
-                  <span>Sync Lip</span>
+                  <span>{copy.actions.generate}</span>
                 </>
               )}
-            </button>
-          </div>
-        </div>
-      </div>
+            </PromptAction>
+          </PromptFooter>
+      </PromptComposer>
 
       {/* ── FULLSCREEN MEDIA MODAL ── */}
       {fullscreenUrl && (
@@ -1081,6 +1335,7 @@ export default function LipSyncStudio({
           />
         </div>
       )}
+      <Toaster position="top-right" containerStyle={{ zIndex: 99999 }} toastOptions={{ duration: 5000, style: { background: '#18181b', color: '#ffffff', border: '1px solid rgba(255,255,255,0.15)', fontSize: '13px', borderRadius: '12px', boxShadow: '0 10px 30px rgba(0,0,0,0.6)', maxWidth: '440px', wordBreak: 'break-word', whiteSpace: 'pre-wrap', padding: '12px 16px' } }} />
     </div>
   );
 }

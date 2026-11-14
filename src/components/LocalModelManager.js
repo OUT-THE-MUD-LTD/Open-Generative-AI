@@ -1,4 +1,5 @@
 import { localAI, isLocalAIAvailable } from '../lib/localInferenceClient.js';
+import { t, tf } from '../lib/i18n.js';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 const DownloadIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>`;
@@ -6,6 +7,10 @@ const TrashIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" s
 const CheckIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>`;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 function fmtGB(gb) {
     return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(gb * 1024).toFixed(0)} MB`;
 }
@@ -26,13 +31,13 @@ function BinaryStatusBar(onStatusChange) {
     label.className = 'flex flex-col gap-0.5';
     label.innerHTML = `
         <span class="text-xs font-bold text-white">sd.cpp inference engine</span>
-        <span id="binary-status-text" class="text-[11px] text-muted">Checking...</span>
+        <span id="binary-status-text" class="text-[11px] text-muted">${t('localModels.checking')}</span>
     `;
 
     const btn = document.createElement('button');
     btn.id = 'binary-action-btn';
     btn.className = 'px-3 py-1.5 rounded-lg text-xs font-bold transition-all hidden';
-    btn.textContent = 'Install';
+    btn.textContent = t('localModels.installEngine');
 
     bar.appendChild(label);
     bar.appendChild(btn);
@@ -47,13 +52,13 @@ function BinaryStatusBar(onStatusChange) {
         const status = await localAI.getBinaryStatus();
         const text = bar.querySelector('#binary-status-text');
         if (status.exists) {
-            text.textContent = 'Installed and ready';
+            text.textContent = t('localModels.installed');
             text.className = 'text-[11px] text-green-400';
             btn.classList.add('hidden');
         } else {
-            text.textContent = 'Not installed — required for local generation';
+            text.textContent = t('localModels.notInstalled');
             text.className = 'text-[11px] text-yellow-400';
-            btn.textContent = 'Install Engine';
+            btn.textContent = t('localModels.installEngine');
             btn.className = 'px-3 py-1.5 rounded-lg text-xs font-bold bg-primary text-black transition-all';
             btn.classList.remove('hidden');
         }
@@ -62,7 +67,7 @@ function BinaryStatusBar(onStatusChange) {
 
     btn.onclick = async () => {
         btn.disabled = true;
-        btn.textContent = 'Downloading...';
+        btn.textContent = t('localModels.downloading');
         progressBar.classList.remove('hidden');
 
         const unsub = localAI.onDownloadProgress(({ id, phase, progress }) => {
@@ -70,7 +75,7 @@ function BinaryStatusBar(onStatusChange) {
             const fill = document.getElementById('binary-progress-fill');
             const text = bar.querySelector('#binary-status-text');
             if (fill) fill.style.width = `${Math.round(progress * 100)}%`;
-            if (text) text.textContent = phase === 'extracting' ? 'Extracting...' : `Downloading... ${Math.round(progress * 100)}%`;
+            if (text) text.textContent = phase === 'extracting' ? t('localModels.extracting') : `${t('localModels.downloading')} ${Math.round(progress * 100)}%`;
         });
 
         try {
@@ -83,7 +88,7 @@ function BinaryStatusBar(onStatusChange) {
             const text = bar.querySelector('#binary-status-text');
             if (text) text.textContent = `Error: ${err.message}`;
             btn.disabled = false;
-            btn.textContent = 'Retry';
+            btn.textContent = t('common.retry');
         }
     };
 
@@ -108,14 +113,14 @@ function AuxRow(label, auxKey, initStatus, onStateChange) {
         </div>
         <div class="flex items-center gap-2 shrink-0">
             ${isReady
-                ? `<span class="text-[10px] text-green-400">Ready</span>`
-                : `<button class="aux-dl-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30 transition-all">${DownloadIcon} Get</button>`}
+                ? `<span class="text-[10px] text-green-400">${t('localModels.ready')}</span>`
+                : `<button class="aux-dl-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30 transition-all">${DownloadIcon} ${t('localModels.get')}</button>`}
         </div>
         <div class="aux-progress hidden w-full col-span-2 mt-1">
             <div class="h-1 rounded-full bg-white/10 overflow-hidden">
                 <div class="aux-fill h-full bg-primary transition-all" style="width:0%"></div>
             </div>
-            <span class="aux-text text-[10px] text-muted block mt-0.5">Downloading...</span>
+            <span class="aux-text text-[10px] text-muted block mt-0.5">${t('localModels.downloading')}</span>
         </div>
     `;
 
@@ -133,7 +138,7 @@ function AuxRow(label, auxKey, initStatus, onStateChange) {
             const unsub = localAI.onDownloadProgress(({ id, phase, progress }) => {
                 if (id !== auxId) return;
                 progFill.style.width = `${Math.round(progress * 100)}%`;
-                progText.textContent = phase === 'done' ? 'Complete!' : `Downloading... ${Math.round(progress * 100)}%`;
+                progText.textContent = phase === 'done' ? t('localModels.complete') : `${t('localModels.downloading')} ${Math.round(progress * 100)}%`;
             });
 
             try {
@@ -144,7 +149,7 @@ function AuxRow(label, auxKey, initStatus, onStateChange) {
                 unsub();
                 progText.textContent = `Error: ${err.message}`;
                 btn.disabled = false;
-                btn.innerHTML = `${DownloadIcon} Retry`;
+                btn.innerHTML = `${DownloadIcon} ${t('common.retry')}`;
             }
         };
     }
@@ -152,66 +157,95 @@ function AuxRow(label, auxKey, initStatus, onStateChange) {
     return row;
 }
 
-// ─── Wan2GP Server Config ────────────────────────────────────────────────────
+// ─── Wan2GP Config ───────────────────────────────────────────────────────────
+// Two ways to reach Wan2GP: its folder on this machine (preferred — the app runs
+// `wgp.py` itself) or a remote WanGP MCP server. A folder wins when both are set.
 function Wan2gpConfigBar(onChange) {
+    const inputClass = 'flex-1 min-w-0 bg-white/5 border border-white/5 focus:border-primary/40 rounded-lg px-3 py-1.5 text-xs text-white placeholder-white/30 focus:outline-none';
+    const secondaryBtn = 'px-3 py-1.5 rounded-lg text-xs font-bold bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30 transition-all shrink-0';
     const wrap = document.createElement('div');
     wrap.className = 'flex flex-col gap-3 p-3 rounded-xl bg-white/3 border border-white/5';
     wrap.innerHTML = `
         <div class="flex flex-col gap-0.5">
-            <span class="text-xs font-bold text-white">Wan2GP server (optional)</span>
-            <span class="text-[11px] text-muted leading-relaxed">
-                Run <a href="https://github.com/deepbeepmeep/Wan2GP" target="_blank" class="text-primary hover:underline">Wan2GP</a>
-                on a CUDA box (<code class="text-primary/80">python wgp.py --listen --server-name 0.0.0.0</code>) to unlock video models from this UI.
-            </span>
+            <span class="text-xs font-bold text-white">${t('localModels.wan2gpTitle')}</span>
+            <span class="text-[11px] text-muted leading-relaxed">${t('localModels.wan2gpHelp')}</span>
         </div>
-        <div class="flex items-center gap-2">
-            <input id="wan2gp-url" type="text" placeholder="http://127.0.0.1:7860"
-                   class="flex-1 bg-white/5 border border-white/5 focus:border-primary/40 rounded-lg px-3 py-1.5 text-xs text-white placeholder-white/30 focus:outline-none"/>
-            <button id="wan2gp-test" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30 transition-all">Test</button>
-            <button id="wan2gp-save" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-primary text-black hover:shadow-glow transition-all">Save</button>
+        <div class="flex flex-col gap-1.5">
+            <span class="text-[10px] font-bold text-secondary uppercase tracking-wider">${t('localModels.wan2gpFolder')}</span>
+            <div class="flex items-center gap-2">
+                <input id="wan2gp-dir" type="text" placeholder="/home/you/Wan2GP" class="${inputClass}"/>
+                <button id="wan2gp-browse" class="${secondaryBtn}">${t('localModels.browse')}</button>
+            </div>
+            <input id="wan2gp-python" type="text" class="${inputClass}"/>
         </div>
-        <div id="wan2gp-status" class="text-[11px] text-muted">Not configured</div>
+        <div class="flex flex-col gap-1.5">
+            <span class="text-[10px] font-bold text-secondary uppercase tracking-wider">${t('localModels.wan2gpRemote')}</span>
+            <input id="wan2gp-url" type="text" placeholder="http://192.168.1.42:7866/mcp" class="${inputClass}"/>
+            <span class="text-[10px] text-muted leading-relaxed">${t('localModels.wan2gpRemoteHelp')}</span>
+        </div>
+        <div class="flex items-center gap-2 justify-end">
+            <button id="wan2gp-check" class="${secondaryBtn}">${t('localModels.check')}</button>
+            <button id="wan2gp-save" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-primary text-black hover:shadow-glow transition-all">${t('localModels.save')}</button>
+        </div>
+        <div id="wan2gp-status" class="text-[11px] text-muted whitespace-pre-wrap break-words">${t('localModels.notConfigured')}</div>
     `;
 
-    const input = wrap.querySelector('#wan2gp-url');
-    const testBtn = wrap.querySelector('#wan2gp-test');
+    const dirInput = wrap.querySelector('#wan2gp-dir');
+    const pythonInput = wrap.querySelector('#wan2gp-python');
+    const urlInput = wrap.querySelector('#wan2gp-url');
+    const checkBtn = wrap.querySelector('#wan2gp-check');
     const saveBtn = wrap.querySelector('#wan2gp-save');
     const statusEl = wrap.querySelector('#wan2gp-status');
     const setStatus = (text, kind = 'muted') => {
         const colorMap = { muted: 'text-muted', ok: 'text-green-400', warn: 'text-yellow-400', err: 'text-red-400' };
-        statusEl.className = `text-[11px] ${colorMap[kind] || colorMap.muted}`;
+        statusEl.className = `text-[11px] whitespace-pre-wrap break-words ${colorMap[kind] || colorMap.muted}`;
         statusEl.textContent = text;
     };
+    const updatePythonPlaceholder = () => {
+        const dir = dirInput.value.trim().replace(/[\\/]+$/, '');
+        pythonInput.placeholder = dir
+            ? tf('localModels.pythonDefault', `${dir}/venv/bin/python`)
+            : t('localModels.pythonPath');
+    };
+    const formValues = () => ({ dir: dirInput.value.trim(), python: pythonInput.value.trim(), url: urlInput.value.trim() });
+    const runCheck = async (cfg) => {
+        setStatus(t('localModels.probing'), 'muted');
+        const r = await localAI.checkWan2gp(cfg);
+        const modeLabel = r.mode === 'remote' ? t('localModels.modeRemote') : t('localModels.modeLocal');
+        setStatus(r.ok ? `${modeLabel} · ${r.message}` : `${modeLabel} · ${r.error}`, r.ok ? 'ok' : 'err');
+        return r;
+    };
 
+    dirInput.oninput = updatePythonPlaceholder;
     (async () => {
         const cfg = await localAI.getWan2gpConfig();
-        if (cfg.url) {
-            input.value = cfg.url;
-            const r = await localAI.probeWan2gp(cfg.url);
-            setStatus(r.ok ? `Connected · Gradio ${r.version}` : `Saved URL not reachable: ${r.error}`, r.ok ? 'ok' : 'warn');
-        } else {
-            setStatus('Not configured (Wan2GP models will appear offline)', 'muted');
-        }
+        dirInput.value = cfg.dir || '';
+        pythonInput.value = cfg.python || '';
+        urlInput.value = cfg.url || '';
+        updatePythonPlaceholder();
+        if (cfg.dir || cfg.url) await runCheck({ quick: true });
+        else setStatus(t('localModels.notConfiguredNote'), 'muted');
     })();
 
-    testBtn.onclick = async () => {
-        const url = input.value.trim();
-        if (!url) { setStatus('Enter a URL first', 'warn'); return; }
-        setStatus('Probing...', 'muted');
-        testBtn.disabled = true;
-        try {
-            const r = await localAI.probeWan2gp(url);
-            setStatus(r.ok ? `Reachable · Gradio ${r.version}` : `Unreachable: ${r.error}`, r.ok ? 'ok' : 'err');
-        } finally { testBtn.disabled = false; }
+    wrap.querySelector('#wan2gp-browse').onclick = async () => {
+        const dir = await localAI.pickWan2gpFolder();
+        if (dir) { dirInput.value = dir; updatePythonPlaceholder(); }
+    };
+
+    checkBtn.onclick = async () => {
+        const cfg = formValues();
+        if (!cfg.dir && !cfg.url) { setStatus(t('localModels.wan2gpEnterFirst'), 'warn'); return; }
+        checkBtn.disabled = true;
+        try { await runCheck(cfg); } finally { checkBtn.disabled = false; }
     };
 
     saveBtn.onclick = async () => {
-        const url = input.value.trim();
         saveBtn.disabled = true;
         try {
-            await localAI.setWan2gpUrl(url);
-            const r = url ? await localAI.probeWan2gp(url) : { ok: false, error: 'cleared' };
-            setStatus(r.ok ? `Saved · Connected to Gradio ${r.version}` : (url ? `Saved, not reachable: ${r.error}` : 'Cleared'), r.ok ? 'ok' : 'warn');
+            const cfg = formValues();
+            await localAI.setWan2gpConfig(cfg);
+            if (cfg.dir || cfg.url) await runCheck({ quick: true });
+            else setStatus(t('localModels.notConfiguredNote'), 'muted');
             onChange?.();
         } finally { saveBtn.disabled = false; }
     };
@@ -231,14 +265,16 @@ function Wan2gpModelCard(model) {
                 ${ready ? `<span class="text-green-400">${CheckIcon}</span>` : ''}
             </div>
             <p class="text-[11px] text-muted leading-relaxed">${model.description}</p>
+            ${!ready && model.unavailableReason ? `<p class="text-[10px] text-yellow-400/80 leading-relaxed">${escapeHtml(model.unavailableReason)}</p>` : ''}
+            ${ready && model.availabilityNote ? `<p class="text-[10px] text-muted leading-relaxed">${escapeHtml(model.availabilityNote)}</p>` : ''}
             <div class="flex items-center gap-1.5 flex-wrap mt-1">
                 <span class="px-1.5 py-0.5 rounded-md text-[10px] font-bold ${model.type === 'video' ? 'bg-purple-500/15 text-purple-300' : 'bg-primary/10 text-primary'}">${model.type.toUpperCase()}</span>
-                <span class="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-white/5 text-muted">via Wan2GP</span>
+                <span class="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-white/5 text-muted">${model.modelType}</span>
                 ${(model.tags || []).filter(t => !['featured', 'remote'].includes(t)).map(t => `<span class="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-white/5 text-muted">${t}</span>`).join('')}
             </div>
         </div>
         <div class="shrink-0">
-            <span class="text-[10px] font-bold ${ready ? 'text-green-400' : 'text-yellow-400'}">${ready ? 'Available' : 'Server offline'}</span>
+            <span class="text-[10px] font-bold ${ready ? 'text-green-400' : 'text-yellow-400'}">${ready ? t('localModels.available') : t('localModels.offline')}</span>
         </div>
     `;
     return card;
@@ -259,7 +295,7 @@ function ModelCard(model, onStateChange) {
             <div class="flex flex-col gap-1 min-w-0">
                 <div class="flex items-center gap-2 flex-wrap">
                     <span class="text-sm font-bold text-white truncate">${model.name}</span>
-                    ${model.featured ? `<span class="px-1.5 py-0.5 rounded-md text-[10px] font-black bg-primary/20 text-primary border border-primary/30">⚡ Featured</span>` : ''}
+                    ${model.featured ? `<span class="px-1.5 py-0.5 rounded-md text-[10px] font-black bg-primary/20 text-primary border border-primary/30">${t('localModels.featured')}</span>` : ''}
                     ${fullyReady ? `<span class="text-green-400">${CheckIcon}</span>` : ''}
                 </div>
                 <p class="text-[11px] text-muted leading-relaxed">${model.description}</p>
@@ -272,7 +308,7 @@ function ModelCard(model, onStateChange) {
             <div class="flex items-center gap-2 shrink-0">
                 ${isDownloaded
                     ? `<button class="delete-btn p-2 rounded-lg text-red-400 hover:bg-red-500/10 transition-all">${TrashIcon}</button>`
-                    : `<button class="download-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-primary text-black hover:shadow-glow transition-all">${DownloadIcon} Download</button>`
+                    : `<button class="download-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-primary text-black hover:shadow-glow transition-all">${DownloadIcon} ${t('localModels.download')}</button>`
                 }
             </div>
         </div>
@@ -280,7 +316,7 @@ function ModelCard(model, onStateChange) {
             <div class="h-1 rounded-full bg-white/10 overflow-hidden">
                 <div class="progress-fill h-full bg-primary transition-all" style="width:0%"></div>
             </div>
-            <span class="progress-text text-[10px] text-muted mt-1 block">Preparing...</span>
+            <span class="progress-text text-[10px] text-muted mt-1 block">${t('localModels.preparing')}</span>
         </div>
         ${model.requiresAuxiliary ? `<div class="aux-section flex flex-col gap-1.5 pt-1 border-t border-white/5"></div>` : ''}
     `;
@@ -289,7 +325,7 @@ function ModelCard(model, onStateChange) {
     if (model.requiresAuxiliary) {
         const auxSection = card.querySelector('.aux-section');
         auxSection.appendChild(document.createElement('span')).className = 'text-[10px] text-muted uppercase tracking-wider font-bold';
-        auxSection.querySelector('span').textContent = 'Required components';
+        auxSection.querySelector('span').textContent = t('localModels.requiredComponents');
         auxSection.appendChild(AuxRow('Qwen3-4B Text Encoder (2.4 GB)', 'llm', auxStatus.llm, onStateChange));
         auxSection.appendChild(AuxRow('FLUX VAE (335 MB)', 'vae', auxStatus.vae, onStateChange));
     }
@@ -302,13 +338,13 @@ function ModelCard(model, onStateChange) {
     if (downloadBtn) {
         downloadBtn.onclick = async () => {
             downloadBtn.disabled = true;
-            downloadBtn.innerHTML = `<span class="animate-spin">◌</span> Starting...`;
+            downloadBtn.innerHTML = `<span class="animate-spin">◌</span> ${t('localModels.starting')}`;
             progressWrap.classList.remove('hidden');
 
             const unsub = localAI.onDownloadProgress(({ id, phase, progress }) => {
                 if (id !== model.id) return;
                 progressFill.style.width = `${Math.round(progress * 100)}%`;
-                progressText.textContent = phase === 'done' ? 'Complete!' : `Downloading... ${Math.round(progress * 100)}%`;
+                progressText.textContent = phase === 'done' ? t('localModels.complete') : `${t('localModels.downloading')} ${Math.round(progress * 100)}%`;
             });
 
             try {
@@ -319,7 +355,7 @@ function ModelCard(model, onStateChange) {
                 unsub();
                 progressText.textContent = `Error: ${err.message}`;
                 downloadBtn.disabled = false;
-                downloadBtn.innerHTML = `${DownloadIcon} Retry`;
+                downloadBtn.innerHTML = `${DownloadIcon} ${t('common.retry')}`;
             }
         };
     }
@@ -327,7 +363,7 @@ function ModelCard(model, onStateChange) {
     const deleteBtn = card.querySelector('.delete-btn');
     if (deleteBtn) {
         deleteBtn.onclick = async () => {
-            if (!confirm(`Delete "${model.name}"? You'll need to re-download it to use it again.`)) return;
+            if (!confirm(tf('localModels.deleteConfirm', model.name))) return;
             await localAI.deleteModel(model.id);
             if (onStateChange) onStateChange();
         };
@@ -344,8 +380,8 @@ export function LocalModelManager() {
     if (!isLocalAIAvailable()) {
         root.innerHTML = `
             <div class="flex flex-col items-center gap-3 py-8 text-center">
-                <p class="text-sm font-bold text-white">Local Models</p>
-                <p class="text-xs text-muted max-w-xs">Local model inference is only available in the desktop app (Electron build). Use <span class="text-primary font-bold">npm run electron:build</span> to build.</p>
+                <p class="text-sm font-bold text-white">${t('localModels.title')}</p>
+                <p class="text-xs text-muted max-w-xs">${t('localModels.webOnly')}</p>
             </div>
         `;
         return root;
@@ -354,7 +390,7 @@ export function LocalModelManager() {
     // ── Section: engine status
     const engineSection = document.createElement('div');
     engineSection.className = 'flex flex-col gap-2';
-    engineSection.innerHTML = `<h3 class="text-xs font-bold text-secondary uppercase tracking-wider">Inference Engine</h3>`;
+    engineSection.innerHTML = `<h3 class="text-xs font-bold text-secondary uppercase tracking-wider">${t('localModels.inferenceEngine')}</h3>`;
 
     let binaryReady = false;
     const binaryBar = BinaryStatusBar((ready) => { binaryReady = ready; });
@@ -368,18 +404,32 @@ export function LocalModelManager() {
     const modelsSection = document.createElement('div');
     modelsSection.className = 'flex flex-col gap-3';
     modelsSection.innerHTML = `
-        <div class="flex items-center justify-between">
-            <h3 class="text-xs font-bold text-secondary uppercase tracking-wider">Local Models</h3>
-            <span class="text-[10px] text-muted">Stored in your app data folder</span>
+        <div class="flex items-center justify-between gap-3">
+            <h3 class="text-xs font-bold text-secondary uppercase tracking-wider shrink-0">${t('localModels.title')}</h3>
+            <span id="local-model-storage" class="min-w-0 truncate text-right text-[10px] text-muted">${t('localModels.checkingStorage')}</span>
         </div>
         <div id="local-model-list" class="flex flex-col gap-3"></div>
     `;
     root.appendChild(modelsSection);
 
     const listEl = modelsSection.querySelector('#local-model-list');
+    const storageEl = modelsSection.querySelector('#local-model-storage');
+
+    const refreshStorageInfo = async () => {
+        try {
+            const status = await localAI.getBinaryStatus();
+            const storagePath = status.modelsDir || status.dataDir;
+            storageEl.textContent = storagePath ? `${t('localModels.storedIn')} ${storagePath}` : t('localModels.storedDefault');
+            if (storagePath && status.envVar) {
+                storageEl.title = `Set ${status.envVar} before launch to change this location`;
+            }
+        } catch (_) {
+            storageEl.textContent = t('localModels.storedDefault');
+        }
+    };
 
     const renderModels = async () => {
-        listEl.innerHTML = `<div class="text-xs text-muted text-center py-4">Loading...</div>`;
+        listEl.innerHTML = `<div class="text-xs text-muted text-center py-4">${t('localModels.loading')}</div>`;
         try {
             const models = await localAI.listModels();
             listEl.innerHTML = '';
@@ -387,10 +437,11 @@ export function LocalModelManager() {
                 listEl.appendChild(ModelCard(m, renderModels));
             });
         } catch (err) {
-            listEl.innerHTML = `<div class="text-xs text-red-400 text-center py-4">Error loading models: ${err.message}</div>`;
+            listEl.innerHTML = `<div class="text-xs text-red-400 text-center py-4">${t('localModels.errorLoading')}${err.message}</div>`;
         }
     };
 
+    refreshStorageInfo();
     renderModels();
 
     return root;
